@@ -1,4 +1,5 @@
 `timescale 1ns/1ps
+`default_nettype none
 
 /**
  * ADS8528 ADC Controller
@@ -227,3 +228,5 @@ module driver (
         end
     end
 endmodule
+
+`default_nettype wire

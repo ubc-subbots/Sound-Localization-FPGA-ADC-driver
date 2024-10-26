@@ -24,37 +24,39 @@
   
 module ADCmemory #(parameter DEPTH = 16384, DATA_WIDTH = 16) (
 	input clk,
-	input rst, 
+	input rst, //reset low
 	input write,
 	input read, 
 	
-	input [DATA_WIDTH - 1:0] data_in,
-   output logic [$clog2(DEPTH) - 1:0] count,
-	output logic [DATA_WIDTH - 1:0] data_out,
+	input [DATA_WIDTH - 1:0] data_in, //data to write to mem
+   output logic [$clog2(DEPTH) - 1:0] count, //amount of data in mem
+	output logic [DATA_WIDTH - 1:0] data_out, //data read from mem
 	output full,
 	output empty
 );
 	
-	logic [DATA_WIDTH-1:0] storage [DEPTH];
-	logic [$clog2(DEPTH) - 1:0] write_ptr;
-	logic  [$clog2(DEPTH) - 1:0] read_ptr;
+	logic [DATA_WIDTH-1:0] storage [DEPTH]; //Memory
+	logic [$clog2(DEPTH) - 1:0] write_ptr;	//Index in storage to write to 
+	logic  [$clog2(DEPTH) - 1:0] read_ptr; //Index in storage to read from 
 
-	assign full = (count == DEPTH);
-	assign empty = (count == 0);
+	assign full = (count == DEPTH); //Boolean, tells us if storage is full (indicated if there is space in memto write to)
+	assign empty = (count == 0); //Boolean, tells us if storage is empty (indicates is the is info to read from mem)
 
 	always_ff @(posedge clk) begin
+		//reset
 		 if (!rst) begin
 			  write_ptr <= 0;
 			  read_ptr <= 0;
-			  count <= 0;
+			  count <= 0; 
 		 end
+		 //read from or write to mem
 		 else begin
-			  if (write & !full) begin  
+			  if (write & !full) begin  //write to mem if not full and write is 1
 					storage[write_ptr] <= data_in;
 					write_ptr <= write_ptr + 1;  //write_ptr over flows 
 					count <= count + 1;
 			  end
-			  if (read & !empty) begin
+			  if (read & !empty) begin //read from mem if it is not empty and read is 1
 					data_out <= storage[read_ptr];
 					read_ptr <= read_ptr + 1;
 					count <= count - 1;
