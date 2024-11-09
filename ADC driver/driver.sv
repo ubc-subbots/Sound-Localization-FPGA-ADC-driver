@@ -138,7 +138,7 @@ module driver (
                     data_adc_out <= 16'h8054; // First config register
 
                 end else begin 
-                    data_adc_out <= 16'h03FF; // Second config register
+                    data_adc_out <= 16'h43FF; // Second config register
                 end
             end
         end
