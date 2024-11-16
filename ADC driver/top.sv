@@ -9,22 +9,29 @@
  *
  * TODO:
  *      - rename module to adc_ads8528_sampler_top without breaking Quartus project
+ *      - THRESHOLD_VOLTAGE should be 12 bits to match number of actual data bits
+ *      - What is the reason for the "less than" check in the current threshold detection always block
+ *      - Should threshold_counter be reset if we get a voltage signal that doesnt exceed the threshold?
+ *          - should the voltage values be consecutive
+ *          - would this increase false negatives and lead to missing the start of a pulse?
+ *      - Create moving average of last 10 samples
+ *      - Remove unused variables
  */
 module top #(
-	parameter int 		 BUFFER_DEPTH       = 500,
-	parameter int 		 NUM_OUTPUT_SAMPLES = 500,    // Number of ADC samples sent to raspberry pi
-	parameter bit [15:0] VALID_VOLTAGE      = 16'd32, // Any voltage above this threshold will be considered valid
-	parameter int 		 threshold_count_NEEDED = 20      // Number of valid voltages to be considered valid pulse
+	parameter int 		 BUFFER_DEPTH          = 500,
+    parameter int        PRE_THRESHOLD_SAMPLES = 20,     // Number of samples to save from before threshold detection
+	parameter int 		 NUM_OUTPUT_SAMPLES    = 500,    // Number of ADC samples sent to raspberry pi
+	parameter bit [11:0] THRESHOLD_VOLTAGE     = 12'd32  // Any voltage above this threshold will be considered valid
 ) (
-    inout logic [15:0] DB,  //driver inputs
-    input logic Busy,
-    input logic CLOCK_27M,
-    input logic rst,
-    input logic KEY2,
+    inout        [15:0] DB,  //driver inputs
+    input        Busy,
+    input        CLOCK_27M,
+    input        rst,
+    input        KEY2,
 
-    input logic sclk, //SPI inputs
-    input logic SPI_cs,
-    input logic transaction_done,
+    input        sclk, //SPI inputs
+    input        SPI_cs,
+    input        transaction_done,
 
     output logic convst_A, //Driver outputs to ADC
     output logic convst_B,
@@ -49,16 +56,12 @@ module top #(
 
 
     typedef enum {
-        DEFAULT_WAIT        = 'b0,
-        JUNK                = 'b11,
-        FILL_BUFFER         = 'b1,
-        DUMP_EXCESS         = 'b1010,
-        COLLECT_UNTIL_FULL  = 'b1001,
-        WAIT_FOR_FILL       = 'b1000,
-        PASSING_DATA_TO_SPI = 'b10,
-        SPI                 = 'b100,
-        WAIT_FOR_SPI        = 'b10000
+        WAITING,
+        FILL,
+        EMPTY
     } state_t;
+
+    localparam int NUM_CHANNELS = 5;
 
 
     ////////////////////////////////////////////////////////////////////////////////////////////////
@@ -72,6 +75,12 @@ module top #(
     logic [15:0] adc_data_out;
     logic        adc_data_out_valid;
 
+    // Outputs of ADC ADS8528 Controller sorted by channel
+    logic [11:0]              adc_channel_data [NUM_CHANNELS-1:0];
+    logic [NUM_CHANNELS-1:0]  adc_channel_data_valid;
+    logic [11:0]              adc_channel_average [NUM_CHANNELS-1:0];
+    logic [NUM_CHANNELS-1:0]  adc_channel_average_valid;
+
     // FIFO Buffer Signals
     logic                            write_to_buffer;  // Assert to write a value to the input of the buffer
     logic                            read_from_buffer; // Assert to read the value at the output of the buffer
@@ -82,9 +91,11 @@ module top #(
     // SPI Slave signals
     logic ready_for_data;
 
-    logic [31:0] threshold_count; // Counter of consecutive valid voltages for threshold detection
-    logic [31:0] count;           // Counter to indicate how many valid samples we are storing in storage, 
-                                  // and if this hits NUM_OUTPUT_SAMPLES, empty everything to SPI 
+    // TODO: Implement in SPI state machine?
+    logic spi_read_data;
+    logic spi_transaction_done;
+
+    logic [31:0] fill_counter;    // Counter for filling buffer after threshold detection
 
 
     ////////////////////////////////////////////////////////////////////////////////////////////////
@@ -96,12 +107,14 @@ module top #(
     assign SPI_RDY = state[2];
 
 
+    // TODO: Implement these signals in spi controller
+    assign spi_read_data        = 1'b1;
+    assign spi_transaction_done = 1'b1;
+
+
     ////////////////////////////////////////////////////////////////////////////////////////////////
     // SECTION: Logic Implementation
 
-
-    assign write_to_buffer  = state[0];
-    assign read_from_buffer = state[1];
 
     // Clock Divider
     Clk_divider clk_divider_inst (
@@ -138,6 +151,27 @@ module top #(
         .data_valid    ( adc_data_out_valid )
     );
 
+    // Sort signals by channel for threshold detection
+    genvar i;
+    generate
+        for (i = 0; i < NUM_CHANNELS; i++) begin : gen_avg_window_each_channel
+            assign adc_channel_data[i] = adc_data_out[11:0];
+            assign adc_channel_data_valid[i] = adc_data_out_valid && adc_data_out[14:12] == i;
+
+            avg_window #(
+                .N          ( 4  ),
+                .DATA_WIDTH ( 12 )
+            ) avg_window_each_channel (
+                .clk           ( clk                          ),
+                .sresetn       ( rst                          ),
+                .data_in       ( adc_channel_data[i]          ),
+                .data_valid    ( adc_channel_data_valid[i]    ),
+                .average       ( adc_channel_average[i]       ),
+                .average_valid ( adc_channel_average_valid[i] )
+            );
+        end
+    endgenerate
+
     // FIFO Buffer for ADC Data
     ADCmemory fifo_buffer_inst  (
         .clk      ( clk              ),
@@ -161,107 +195,81 @@ module top #(
         .ready_for_data   ( ready_for_data  )
     );
 
-    // Top-Level State Machine Controller
+    // Threshold Detection State Machine Control
     always_ff@(posedge clk or negedge rst) begin
+        // Asynchronous reset
         if (!rst) begin
-            state <= DEFAULT_WAIT;
+            state        <= WAITING;
+            fill_counter <= '0;
 
         end else begin
             case(state)
-                DEFAULT_WAIT: begin
-                    if (adc_data_out_valid) begin
-                        if (threshold_count == threshold_count_NEEDED) begin
-                            state <= COLLECT_UNTIL_FULL;
-                        end else if (buffer_count < BUFFER_DEPTH) begin
-                            state <= FILL_BUFFER;
-                        end else if (buffer_count == BUFFER_DEPTH) begin
-                            state <= JUNK;
-                        end else if (buffer_count > BUFFER_DEPTH) begin
-                            state <= DUMP_EXCESS;
-                        end else begin
-                            state <= DEFAULT_WAIT;
+                // Wait for moving average of last N samples of any channel to exceed the threshold voltage
+                WAITING: begin
+                    for (int i = 0; i < NUM_CHANNELS; i++) begin
+                        if (adc_channel_average_valid[i] && adc_channel_average[i] > THRESHOLD_VOLTAGE) begin
+                            state <= FILL;
                         end
                     end
                 end
 
-                JUNK: begin
-                    state <= DEFAULT_WAIT;
-                end
-
-                FILL_BUFFER: begin
-                    state <= DEFAULT_WAIT;
-                end
-
-                COLLECT_UNTIL_FULL: begin
-                    if (count == NUM_OUTPUT_SAMPLES) begin
-                        state <= PASSING_DATA_TO_SPI;
-                    end else begin
-                        state <= WAIT_FOR_FILL;
-                    end
-                end
-
-                WAIT_FOR_FILL: begin
+                // After threshold voltage is detected, fill remainder of buffer with
+                // NUM_OUTPUT_SAMPLES - PRE_THRESHOLD_SAMPLES ADC samples
+                FILL: begin
                     if (adc_data_out_valid) begin
-                        state <= COLLECT_UNTIL_FULL;
-                    end else begin 
-                        state <= WAIT_FOR_FILL;
+                        fill_counter <= fill_counter + 'd1;
+
+                        // If NUM_OUTPUT_SAMPLES is reached, move to EMPTY state to have SPI feed data to output
+                        if (fill_counter == NUM_OUTPUT_SAMPLES - PRE_THRESHOLD_SAMPLES - 1) begin
+                            state <= EMPTY;
+                        end
                     end
                 end
 
-                PASSING_DATA_TO_SPI: begin
-                    state <= SPI;
-                end
-
-                SPI: begin
-                    if (empty) begin
-                        state <= DEFAULT_WAIT;
-                    end else if (~SPI_cs) begin
-                        state <= WAIT_FOR_SPI;
-                    end else begin
-                        state <= SPI;
+                // Release buffer read control to SPI state machine, do not allow any writes
+                EMPTY: begin
+                    // Wait for SPI transaction to complete, then go back to WAITING STATE
+                    if (spi_transaction_done) begin
+                        state <= WAITING;
                     end
                 end
 
-                WAIT_FOR_SPI: begin
-                    if (transaction_done) begin
-                        state <= PASSING_DATA_TO_SPI;
-                    end else begin
-                        state <= WAIT_FOR_SPI;
-                    end
+                default: begin
+                    state <= WAITING;
                 end
-
-                default: state <= DEFAULT_WAIT;
-            endcase 
+            endcase
         end
     end
 
-    // Threshold Detection Counter Register
-    always_ff @(posedge clk or negedge rst) begin
-        if(!rst) begin
-            threshold_count <= 32'd0;
+    always_comb begin
+            case(state)
+                // Wait for THRESHOLD_COUNT voltage values over THRESHOLD_VOLTAGE to be detected
+                WAITING: begin
+                    write_to_buffer = adc_data_out_valid;
 
-        end else begin
-            if ((((state == JUNK) || (state == FILL_BUFFER))) && ((adc_data_out >= VALID_VOLTAGE) && (adc_data_out < 16'b1111_1000_0000_0000))) begin
-                threshold_count <= threshold_count + 1'd1;
+                    // Read from buffer if writing and if we would be full next cycle without
+                    // reading. One empty space must be left to enable unblocked writes whenever
+                    // adc_data_out is valid.
+                    read_from_buffer = adc_data_out_valid && buffer_count == BUFFER_DEPTH - 1;
+                end
 
-            end else if (state == COLLECT_UNTIL_FULL) begin
-                threshold_count <= 32'd0;
-            end
-        end
-    end
+                // After threshold voltage is detected, fill remainder of buffer with
+                // NUM_OUTPUT_SAMPLES - PRE_THRESHOLD_SAMPLES ADC samples
+                FILL: begin
+                    write_to_buffer = adc_data_out_valid;
 
-    always_ff@(posedge clk or negedge rst) begin
-        if(!rst) begin
-            count <= 32'd0;
+                    // Read from buffer if writing and if we would be full next cycle without
+                    // reading. One empty space must be left to enable unblocked writes whenever
+                    // adc_data_out is valid.
+                    read_from_buffer = adc_data_out_valid && buffer_count == BUFFER_DEPTH - 1;
+                end
 
-        end else begin
-            if (state == COLLECT_UNTIL_FULL) begin
-                count <= count + 1'd1;
-
-            end else if (state == SPI) begin
-                count <= 32'd0;
-            end
-        end
+                // Release buffer read control to SPI state machine, do not allow any writes
+                EMPTY: begin
+                    write_to_buffer  = 0;
+                    read_from_buffer = spi_read_data;
+                end
+            endcase
     end
 endmodule
 

@@ -19,11 +19,11 @@
  *        - Generalize module to adc_ads85x8_ctrl (add parameter for datawidth to support 12, 14, and 16 chip versions)
  */
 module driver (
-    input  logic        clk,
-    input  logic        sresetn,
-    input  logic        busy,          // Indicates a conversion is taking place on ADS8528 (Active-high)
+    input               clk,
+    input               sresetn,
+    input               busy,          // Indicates a conversion is taking place on ADS8528 (Active-high)
     
-    inout  logic [15:0] data_adc,      // input/output databits from ADS8528
+    inout        [15:0] data_adc,      // input/output databits from ADS8528
 
     // ADS8528 Control Signals
     output logic        read_n,        // Tells ADS8528 its data output has been read (Active-low)
