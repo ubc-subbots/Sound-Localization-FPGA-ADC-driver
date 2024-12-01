@@ -156,6 +156,11 @@ module driver (
             case(state_ff)
                 // Waiting while initial writes to ADC are completed
                 HOLD: begin
+
+                    data_valid <= 1'b0;
+                    read_n     <= 1'b1;
+                    conv_start <= 1'b0;
+
                     if (finished_write) begin
                         state_ff <= INIT;
                     end else begin
@@ -165,6 +170,12 @@ module driver (
 
                 // Initiates conversions
                 INIT: begin
+
+                    data_valid <= 1'b0;
+                    read_n     <= 1'b1;
+                    conv_start <= 1'b1;
+
+                    selected_channel <= 3'b000;
                     // Transitioning when busy goes high ensures that the conversion has actually
                     // begun before going to BUSY state.
                     if (conv_start) begin
@@ -176,6 +187,12 @@ module driver (
 
                 // Waits for busy to go low and then sets read_n low
                 BUSY: begin
+
+                    data_valid   <= 1'b0;
+                    read_n       <= busy || selected_channel == 3'd6;
+                    conv_start   <= 1'b0;
+                    data_out_reg <= data_adc;
+
                     if (selected_channel == 3'd6) begin
                         state_ff <= INIT;
                     end else if (busy) begin
@@ -187,43 +204,17 @@ module driver (
 
                 // Handshake ADC data_out
                 MEM: begin
-                    state_ff <= BUSY;
-                    end
 
-                default: state_ff <= INIT;
-            endcase
-
-            // TODO: This case statement should be integrated with above, with register changes on
-            //             state transitions.
-            case(state_ff)
-                HOLD: begin
-                    data_valid <= 1'b0;
-                    read_n     <= 1'b1;
-                    conv_start <= 1'b0;
-                end
-
-                INIT: begin
-                    data_valid <= 1'b0;
-                    read_n     <= 1'b1;
-                    conv_start <= 1'b1;
-
-                    selected_channel <= 3'b000;
-                end
-
-                BUSY: begin
-                    data_valid   <= 1'b0;
-                    read_n       <= busy || selected_channel == 3'd6;
-                    conv_start   <= 1'b0;
-                    data_out_reg <= data_adc;
-                end
-
-                MEM: begin
                     data_out   <= data_out_reg;
                     data_valid <= 1'b1;
                     read_n     <= 1'b1;
 
                     selected_channel <= selected_channel + 1'b1;
-                end
+
+                    state_ff <= BUSY;
+                    end
+
+                default: state_ff <= INIT;
             endcase
         end
     end
