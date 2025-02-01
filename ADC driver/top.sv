@@ -21,7 +21,8 @@ module top #(
 	parameter int 		 BUFFER_DEPTH          = 500,
     parameter int        PRE_THRESHOLD_SAMPLES = 20,     // Number of samples to save from before threshold detection
 	parameter int 		 NUM_OUTPUT_SAMPLES    = 500,    // Number of ADC samples sent to raspberry pi
-	parameter bit [11:0] THRESHOLD_VOLTAGE     = 12'd32  // Any voltage above this threshold will be considered valid
+	parameter bit [11:0] THRESHOLD_VOLTAGE     = 12'd32,  // Any voltage above this threshold will be considered valid
+    parameter int        NUM_CHANNELS          = 5
 ) (
     inout        [15:0] DB,  //driver inputs
     input        Busy,
@@ -29,8 +30,8 @@ module top #(
     input        rst,
     input        KEY2,
 
-    input        sclk, //SPI inputs
-    input        SPI_cs,
+    input        sclk, //Master clock for SPI, will come from ESP32?
+    input        SPI_cs, //Should be coming from the ESP32
     input        transaction_done,
 
     output logic convst_A, //Driver outputs to ADC
@@ -58,10 +59,15 @@ module top #(
     typedef enum {
         WAITING,
         FILL,
-        EMPTY
+        WAIT_CS,
+        CHECK_SPI_READY,
+        SPI_SEND_CHANNEL_HEADER,
+        CHECK_SPI_READY_DATA,
+        SPI_SEND_CHANNEL_BUFFER
+
     } state_t;
 
-    localparam int NUM_CHANNELS = 5;
+    
 
 
     ////////////////////////////////////////////////////////////////////////////////////////////////
@@ -86,16 +92,21 @@ module top #(
     logic                            read_from_buffer; // Assert to read the value at the output of the buffer
     logic [$clog2(BUFFER_DEPTH)-1:0] buffer_count;     // Indicates the number of values stored in the buffer
     logic                            full, empty;      // Indicates if the buffer is full or empty
-    logic [15:0]                     buffer_data_out;  // Output of the buffer
+    logic [15:0]                     buffer_data_out[NUM_CHANNELS-1:0];  // Output of the buffer
 
     // SPI Slave signals
     logic ready_for_data;
+    //logic spi_cs_L; -> should be supplied by esp32 whoops
 
     // TODO: Implement in SPI state machine?
     logic spi_read_data;
     logic spi_transaction_done;
 
     logic [31:0] fill_counter;    // Counter for filling buffer after threshold detection
+    logic [15:0] buffer_data_to_SPI;
+    
+    //counter for buffers during spi
+    logic [$clog2(BUFFER_DEPTH)-1:0] chan_counter;
 
 
     ////////////////////////////////////////////////////////////////////////////////////////////////
@@ -156,7 +167,7 @@ module top #(
     generate
         for (i = 0; i < NUM_CHANNELS; i++) begin : gen_avg_window_each_channel
             assign adc_channel_data[i] = adc_data_out[11:0];
-            assign adc_channel_data_valid[i] = adc_data_out_valid && adc_data_out[14:12] == i;
+            assign adc_channel_data_valid[i] = adc_data_out_valid && (adc_data_out[14:12] == i);
 
             avg_window #(
                 .N          ( 4  ),
@@ -169,28 +180,30 @@ module top #(
                 .average       ( adc_channel_average[i]       ),
                 .average_valid ( adc_channel_average_valid[i] )
             );
+
+            // FIFO Buffer for ADC Data
+            ADCmemory fifo_buffer_inst  (
+                .clk      ( clk              ),
+                .rst      ( rst              ),
+                .write    ( write_to_buffer[i]  ),
+                .read     ( read_from_buffer[i] ),
+                .data_in  ( adc_data_out[i]     ),
+                .count    ( buffer_count[i]     ),
+                .data_out ( buffer_data_out[i]  ),
+                .full     ( full[i]             ),
+                .empty    ( empty[i]            )
+            );
         end
     endgenerate
 
-    // FIFO Buffer for ADC Data
-    ADCmemory fifo_buffer_inst  (
-        .clk      ( clk              ),
-        .rst      ( rst              ),
-        .write    ( write_to_buffer  ),
-        .read     ( read_from_buffer ),
-        .data_in  ( adc_data_out     ),
-        .count    ( buffer_count     ),
-        .data_out ( buffer_data_out  ),
-        .full     ( full             ),
-        .empty    ( empty            )
-    );
+
 
     // SPI Slave connected to RaspberryPi
     spi spi_slave_inst(
         .rst              ( rst             ),
         .sclk             ( sclk            ),
         .cs               ( SPI_cs          ),
-        .unprocessed_MISO ( buffer_data_out ),
+        .unprocessed_MISO ( buffer_data_to_SPI),
         .processed_MISO   ( processed_MISO  ),
         .ready_for_data   ( ready_for_data  )
     );
@@ -202,13 +215,16 @@ module top #(
             state        <= WAITING;
             fill_counter <= '0;
 
+
         end else begin
             case(state)
                 // Wait for moving average of last N samples of any channel to exceed the threshold voltage
                 WAITING: begin
                     for (int i = 0; i < NUM_CHANNELS; i++) begin
+                        //So if the channel average of one channel meets the threshold, we're filling the
                         if (adc_channel_average_valid[i] && adc_channel_average[i] > THRESHOLD_VOLTAGE) begin
                             state <= FILL;
+
                         end
                     end
                 end
@@ -217,26 +233,92 @@ module top #(
                 // NUM_OUTPUT_SAMPLES - PRE_THRESHOLD_SAMPLES ADC samples
                 FILL: begin
                     if (adc_data_out_valid) begin
-                        fill_counter <= fill_counter + 'd1;
+
+                        fill_counter <= fill_counter + 'd1; //needs to be zero'd before we go to WAITING again
+
 
                         // If NUM_OUTPUT_SAMPLES is reached, move to EMPTY state to have SPI feed data to output
-                        if (fill_counter == NUM_OUTPUT_SAMPLES - PRE_THRESHOLD_SAMPLES - 1) begin
-                            state <= EMPTY;
+                        if (fill_counter == (NUM_OUTPUT_SAMPLES - PRE_THRESHOLD_SAMPLES - 1)) begin
+                            chan_counter <= 3'b0;
+
+                            //Shouldn't this be WAIT_CS?
+                            //state <= CHECK_SPI_READY;
+                            state <= WAIT_CS;
+
                         end
                     end
                 end
 
-                // Release buffer read control to SPI state machine, do not allow any writes
-                EMPTY: begin
-                    // Wait for SPI transaction to complete, then go back to WAITING STATE
-                    if (spi_transaction_done) begin
-                        state <= WAITING;
+                WAIT_CS: begin
+                    
+                    //checking if the esp32 wants to read data yet
+                    if(SPI_cs) begin
+
+                        state <= CHECK_SPI_READY;
+
                     end
+                    
+                    //Otherwise we spin this state
+
                 end
 
-                default: begin
-                    state <= WAITING;
+                CHECK_SPI_READY: begin
+                   
+                   if(!ready_for_data)begin //active-low!
+
+                        state <= SPI_SEND_CHANNEL_HEADER;
+
+                   end
+                   //Otherwise we spin this state
+
                 end
+
+                SPI_SEND_CHANNEL_HEADER: begin
+                    
+                    if(chan_counter == 3'b111)begin
+
+                        state <= WAITING;
+                        //fill_counter <= 32'b0;
+
+                    end else begin
+
+                        //The channel counter is the header
+            
+                        state <= CHECK_SPI_READY_DATA;
+                        
+                    end
+                    
+            
+                end
+
+                CHECK_SPI_READY_DATA: begin
+
+                    if(!ready_for_data)begin //ready_for_data is active-low!
+
+                        state <= SPI_SEND_CHANNEL_BUFFER;
+
+                    end
+                
+                end
+
+                SPI_SEND_CHANNEL_BUFFER: begin                   
+
+                    if(empty[chan_counter])begin
+
+                        state <= CHECK_SPI_READY;
+                        chan_counter <= chan_counter + 'd1;
+
+                    end
+                
+                end
+
+
+                default: begin
+
+                    state <= WAITING;
+
+                end
+
             endcase
         end
     end
@@ -245,29 +327,67 @@ module top #(
             case(state)
                 // Wait for THRESHOLD_COUNT voltage values over THRESHOLD_VOLTAGE to be detected
                 WAITING: begin
-                    write_to_buffer = adc_data_out_valid;
+
+                    for(int i = 0; i < NUM_CHANNELS; i++) begin
+
+                        write_to_buffer[i] = adc_channel_data_valid[i];
+                        read_from_buffer[i] = adc_channel_data_valid[i] && (buffer_count[i] == BUFFER_DEPTH - 1);
+
+                    end
 
                     // Read from buffer if writing and if we would be full next cycle without
                     // reading. One empty space must be left to enable unblocked writes whenever
                     // adc_data_out is valid.
-                    read_from_buffer = adc_data_out_valid && buffer_count == BUFFER_DEPTH - 1;
+                    
                 end
 
                 // After threshold voltage is detected, fill remainder of buffer with
                 // NUM_OUTPUT_SAMPLES - PRE_THRESHOLD_SAMPLES ADC samples
                 FILL: begin
-                    write_to_buffer = adc_data_out_valid;
+
+                    for(int i = 0; i < NUM_CHANNELS; i++) begin
+
+                        write_to_buffer[i] = adc_channel_data_valid[i];
+                        read_from_buffer[i] = adc_channel_data_valid[i] && (buffer_count[i] == BUFFER_DEPTH - 1);
+
+                    end
 
                     // Read from buffer if writing and if we would be full next cycle without
                     // reading. One empty space must be left to enable unblocked writes whenever
                     // adc_data_out is valid.
-                    read_from_buffer = adc_data_out_valid && buffer_count == BUFFER_DEPTH - 1;
+                    
                 end
 
-                // Release buffer read control to SPI state machine, do not allow any writes
-                EMPTY: begin
-                    write_to_buffer  = 0;
-                    read_from_buffer = spi_read_data;
+                SPI_SEND_CHANNEL_HEADER: begin
+                    //ADC can no longer write to buffer for this channel
+                    write_to_buffer[chan_counter]  = 0;
+                    if(chan_counter != 3'b111) begin
+
+                        buffer_data_to_SPI = {13'b0, chan_counter}; 
+                        
+                    end
+                    
+
+                end
+
+                SPI_SEND_CHANNEL_BUFFER: begin
+                    
+                    
+                    read_from_buffer[chan_counter] = 1'b1;
+                    buffer_data_to_SPI = buffer_data_out[chan_counter];
+
+                    if(empty[chan_counter])begin
+
+                        //we stop reading once it is empty
+                        read_from_buffer[chan_counter] = 0;
+                    end
+
+                end
+                
+
+
+                default: begin
+                    buffer_data_to_SPI = 16'b0;
                 end
             endcase
     end

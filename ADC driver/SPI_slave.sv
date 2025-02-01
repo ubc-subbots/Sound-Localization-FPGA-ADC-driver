@@ -1,11 +1,12 @@
 /*
 * SPI Controller Specification
 *
-* SPI controller for interfacing a Raspberry Pi (master) with FPGA-ADC module (slave).
+* SPI Controller for interfacing an ESP32 (master) with FPGA-ADC module (slave).
 *
 * This synthizes into a SPI module capable of sending 16 bits of data to an external module once 
 * the chip select signal is lowered by the master. 
 *
+* 
 *
 *
 *
@@ -20,14 +21,14 @@ module spi (
 //1. Reset, 2. Serial clock from Raspberry Pi, 3. Chip select signal, switched low for any operation
 	input logic rst,
 	input logic sclk,
-	input logic cs, //TODO: This signal is active low, change across ALL code
+	input logic cs, 
 	
 //2-byte input data from FPGA-ADC system to be serialized & sent to Raspberry Pi
 	input logic [15:0] unprocessed_MISO, 
 
 //1. Serialized output data to be sent to Raspberry Pi, 2. Ready flag for FPGA-ADC system, indicates it is ready for new operation
 	output logic processed_MISO,
-	output logic ready_for_data //TODO: Active low, check if top-level module even checks this
+	output logic ready_for_data 
 
 );
 

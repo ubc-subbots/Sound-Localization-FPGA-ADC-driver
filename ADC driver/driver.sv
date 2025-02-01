@@ -182,6 +182,7 @@ module driver (
                         state_ff <= BUSY;
                     end else begin
                         state_ff <= INIT;
+                    //
                     end
                 end
 

@@ -56,6 +56,7 @@ module ADCmemory #(parameter DEPTH = 16384, DATA_WIDTH = 16) (
 					write_ptr <= write_ptr + 1;  //write_ptr over flows 
 					count <= count + 1;
 			  end
+			  //NOTE: might need to add to this late to make sure ptrs wrap around
 			  if (read & !empty) begin //read from mem if it is not empty and read is 1
 					data_out <= storage[read_ptr];
 					read_ptr <= read_ptr + 1;
