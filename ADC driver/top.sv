@@ -19,20 +19,20 @@
  */
 module top #(
 	parameter int 		 BUFFER_DEPTH          = 500,
-    parameter int        PRE_THRESHOLD_SAMPLES = 20,     // Number of samples to save from before threshold detection
+    parameter int        PRE_THRESHOLD_SAMPLES = 40,     // Number of samples to save from before threshold detection
 	parameter int 		 NUM_OUTPUT_SAMPLES    = 500,    // Number of ADC samples sent to raspberry pi
 	parameter bit [11:0] THRESHOLD_VOLTAGE     = 12'd32,  // Any voltage above this threshold will be considered valid
     parameter int        NUM_CHANNELS          = 5
 ) (
-    inout        [15:0] DB,  //driver inputs
-    input        Busy,
-    input        CLOCK_27M,
-    input        rst,
-    input        KEY2,
+    inout  wire  [15:0] DB,  //driver inputs
+    input  wire  Busy,
+    input  wire  CLOCK_27M,
+    input  wire  rst,
+    input  wire  KEY2,
 
-    input        sclk, //Master clock for SPI, will come from ESP32?
-    input        SPI_cs, //Should be coming from the ESP32
-    input        transaction_done,
+    input  wire  sclk,   // Master clock for SPI, will come from ESP32?
+    input  wire  SPI_cs, // Should be coming from the ESP32
+    input  wire  transaction_done,
 
     output logic convst_A, //Driver outputs to ADC
     output logic convst_B,

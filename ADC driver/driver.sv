@@ -19,11 +19,11 @@
  *        - Generalize module to adc_ads85x8_ctrl (add parameter for datawidth to support 12, 14, and 16 chip versions)
  */
 module driver (
-    input               clk,
-    input               sresetn,
-    input               busy,          // Indicates a conversion is taking place on ADS8528 (Active-high)
+    input  wire         clk,
+    input  wire         sresetn,
+    input  wire         busy,          // Indicates a conversion is taking place on ADS8528 (Active-high)
     
-    inout        [15:0] data_adc,      // input/output databits from ADS8528
+    inout  wire      [15:0] data_adc,  // input/output databits from ADS8528
 
     // ADS8528 Control Signals
     output logic        read_n,        // Tells ADS8528 its data output has been read (Active-low)
@@ -31,7 +31,7 @@ module driver (
     output logic        chipselect_n,  // Chip-select bit, must be deasserted for operation (Active-low)
     output logic        software_mode, // Controls whether ADS8528 is in software or hardware mode
     output logic        serial_mode,   // Controls whether ADS8528 is in serial or parallel mode
-    output logic        standby_n,       // Powers entire device down when deasserted and in hardware mode
+    output logic        standby_n,     // Powers entire device down when deasserted and in hardware mode
 
     // ADS8528 starts conversion of channel 'x' on rising-edge of conv_start_x
     output logic        conv_start_a,
@@ -65,6 +65,7 @@ module driver (
 
     logic finished_write;
     logic conv_start;
+    logic busy_prev;
 
     logic [3:0] selected_channel; // Indicates which channel of ADC is being read, resets to 0 after 5
 
@@ -78,7 +79,7 @@ module driver (
     // SECTION: Output Assignments
 
 
-    assign data_adc = write_n ? 16'bz : data_adc_out;
+    assign data_adc = (!read_n || (write_n && chipselect_n)) ? 16'bz : data_adc_out;
 
     assign software_mode = 1'b1;
     assign serial_mode   = 1'b0;
@@ -94,6 +95,11 @@ module driver (
     ////////////////////////////////////////////////////////////////////////////////////////////////
     // SECTION: Logic Implementation
 
+
+    // Busy Previous Register, used to give one cycle of lenience after busy is deasserted
+    always_ff @(posedge clk) begin
+        busy_prev <= busy;
+    end
 
     // Chip Select Register
     always_ff @(posedge clk) begin
@@ -156,7 +162,6 @@ module driver (
             case(state_ff)
                 // Waiting while initial writes to ADC are completed
                 HOLD: begin
-
                     data_valid <= 1'b0;
                     read_n     <= 1'b1;
                     conv_start <= 1'b0;
@@ -170,7 +175,6 @@ module driver (
 
                 // Initiates conversions
                 INIT: begin
-
                     data_valid <= 1'b0;
                     read_n     <= 1'b1;
                     conv_start <= 1'b1;
@@ -188,7 +192,6 @@ module driver (
 
                 // Waits for busy to go low and then sets read_n low
                 BUSY: begin
-
                     data_valid   <= 1'b0;
                     read_n       <= busy || selected_channel == 3'd6;
                     conv_start   <= 1'b0;
@@ -205,15 +208,14 @@ module driver (
 
                 // Handshake ADC data_out
                 MEM: begin
-
-                    data_out   <= data_out_reg;
+                    data_out   <= data_adc;
                     data_valid <= 1'b1;
                     read_n     <= 1'b1;
 
                     selected_channel <= selected_channel + 1'b1;
 
                     state_ff <= BUSY;
-                    end
+                end
 
                 default: state_ff <= INIT;
             endcase

@@ -1,159 +1,205 @@
+`timescale 1ns/1ns
+
 module driver_tb();
 
-	// declare inputs and outputs to driver dut
-	//inputs
-	reg clk;
-	reg sresetn;		//active low!
-	reg busy;			//active high
+    parameter int NUM_TESTS    = 10;
+    parameter int CLOCK_PERIOD = 20;  // Definite minimum clock period
 
-	//in & out
-	reg [15:0] data_adc;
 
-	//outputs 
-	reg read_n;			//active low
-	reg write_n; 		//active low
-	reg chipselect_n; 	// active low
-	reg software_mode; 	//constant
-	reg serial_mode;	//contant
-	reg standby_n;		//constant
+    ////////////////////////////////////////////////////////////////////////////////////////////////
+    // SECTION: Constants and Type Declarations
 
-	reg conv_start_a;
-	reg conv_start_b;
-	reg conv_start_c;
-	reg conv_start_d;
 
-	reg [15:0] data_out
-	reg data_valid;
+	localparam int        MAX_CONV_DELAY     = 133;  // Maximum time delay for a conversion to complete
+    localparam int        CONV_TO_BUSY_DELAY = 25;   // Time delay from conv_start assertion to busy assertion by ADC
+    localparam int        READN_DATA_DELAY   = 15;   // Time delay from read_n assertion to data becoming valid
+	localparam int        DATA_HOLD_DELAY    = 5;	 // Time delay to output being undefined after read_n goes high
+	localparam int        DATA_TRI_DELAY     = 15;   // Time delay to output tri-state after chip_select_n goes high
+	localparam int        DATA_HOLD_WRITE    = 5;    // Time delay required to hold data valid after rising edge of write_n
 
-	assign err = err_output;
+	localparam bit [31:0] CONFIG_REGISTER    = 32'h805443FF;
 
-	// tracking number of passed and failed tests
-	integer num_passes = 0;
-	integer num_fails = 0;
 
-	//instantiating driver DUT
-	driver DUT(.clk, .sresetn, .busy, .data_adc, .read_n,
-				 .write_n, .chipselect_n, .software_mode,
-				 .serial_mode, .standby_n, .conv_start_a,
-				 .conv_start_b, .conv_start_c, .conv_start_d)
+    ////////////////////////////////////////////////////////////////////////////////////////////////
+    // SECTION: Signal Declarations
 
-	// Clock with period of 10 ticks
-	initial begin
-		clk = 1'b1;
-		forever #5 clk = ~clk;
+
+    // Inputs
+    logic clk;
+    logic sresetn;         //active low
+    logic busy;            //active high
+
+    // in & out
+	logic [15:0] data_adc_drive;
+	wire  [15:0] data_adc;
+
+    // Outputs 
+    logic read_n;          // active low
+    logic write_n;         // active low
+    logic chipselect_n;    // active low
+    logic software_mode;   // constant
+    logic serial_mode;     // contant
+    logic standby_n;       // constant
+
+    logic conv_start_a;
+    logic conv_start_b;
+    logic conv_start_c;
+    logic conv_start_d;
+
+    logic [15:0] data_out;
+    logic 		 data_valid;
+
+    // Test signals
+    logic [15:0] adc_data_queue [$];
+    logic [15:0] received_data_queue [$];
+    logic [15:0] golden_data_queue [$];
+    logic [15:0] test_data;
+
+	logic [31:0] config_register;
+
+	logic [15:0] A, B;
+
+
+    ////////////////////////////////////////////////////////////////////////////////////////////////
+    // SECTION: DUT Instantiation
+
+
+    driver DUT(
+        .clk           ( clk           ),
+        .sresetn       ( sresetn       ),
+        .busy          ( busy          ),
+        .data_adc      ( data_adc      ),
+        .read_n        ( read_n        ),
+            
+        .write_n       ( write_n       ),
+        .chipselect_n  ( chipselect_n  ),
+        .software_mode ( software_mode ),
+        
+        .serial_mode   ( serial_mode   ),
+        .standby_n     ( standby_n     ),
+        .conv_start_a  ( conv_start_a  ),
+        .conv_start_b  ( conv_start_b  ),
+        .conv_start_c  ( conv_start_c  ),
+        .conv_start_d  ( conv_start_d  ),
+
+		.data_out      ( data_out      ),
+		.data_valid    ( data_valid    )
+    );
+
+
+    ////////////////////////////////////////////////////////////////////////////////////////////////
+    // SECTION: Test Implementation
+
+
+	// Implement tri-state behavior
+	assign data_adc = (!read_n || (write_n && chipselect_n)) ? data_adc_drive : 'z;
+
+    // Clock with period of 20ns
+    initial begin
+        clk = 1'b1;
+        forever #(CLOCK_PERIOD/2) clk = ~clk;
+    end
+
+	// Conversion Start Procedure
+    initial forever begin
+		if (conv_start_a) begin
+			// Assert BUSY signal after delay
+			#CONV_TO_BUSY_DELAY;
+			busy = 1'b1;
+
+			// Fill queue with randomized data
+			repeat (8) begin
+				test_data = $urandom();
+				golden_data_queue.push_back(test_data);
+				$display("Pushing test: %d", test_data);
+				adc_data_queue.push_back(test_data);
+			end
+
+			// Random conversion time delay
+			#($urandom() % MAX_CONV_DELAY);
+
+			// Deassert BUSY signal
+			busy = 1'b0;
+		end
+		#1;
 	end
 
-	// updates the number of tests that passes and fails
-	// task to check data_adc 
-	//when data_adc acts as an output
-	task check_data_adc(input [15:0] exp_output, input string msg);
-		assert(data_adc === exp_output) begin
-			$display("[PASS] %s: data_adc is %b", msg, data_adc);
-			num_passes = num_passes + 1;
-		end else begin
-			$error("[FAIL] %s: output is %b (expected %b)", msg, data_adc, exp_output);
-			num_fails = num_fails + 1;
-		end
-	endtask
-
-	// task to check read_n
-	task check_read_n(input expected_read_n, input string msg);
-		assert(read_n === expected_read_n) begin
-			$display("[PASS] %s: read_n is %d", msg, read_n);
-			num_passes = num_passes + 1;
-		end else begin
-			$error("[FAIL] %s: output is %d (expected %d)", msg, read_n, expected_read_n);
-			num_fails = num_fails + 1;
-		end
-	endtask
-
-	// task to check write_n
-	task check_write_n(input expected_write_n, input string msg);
-		assert(write_n === expected_write_n) begin
-			$display("[PASS] %s: write_n is %d", msg, write_n);
-			num_passes = num_passes + 1;
-		end else begin
-			$error("[FAIL] %s: output is %d (expected %d)", msg, write_n, expected_write_n);
-			num_fails = num_fails + 1;
-		end
-	endtask
-
-	// task to check chipselect_n
-	task check_chipselect_n(input expected_chipselect_n, input string msg);
-		assert(chipselect_n === expected_chipselect_n) begin
-			$display("[PASS] %s: chipselect_n is %d", msg, chipselect_n);
-			num_passes = num_passes + 1;
-		end else begin
-			$error("[FAIL] %s: output is %d (expected %d)", msg, chipselect_n, expected_chipselect_n);
-			num_fails = num_fails + 1;
-		end
-	endtask
-
-	// task to check conv_start_x
-	//since all conv_x are equal just check conv a
-	task check_conv_start_x(input expected_conv, input string msg);
-		assert(conv_start_a === expected_conv) begin
-			$display("[PASS] %s: conv_start_x is %d", msg, conv_start_a);
-			num_passes = num_passes + 1;
-		end else begin
-			$error("[FAIL] %s: output is %d (expected %d)", msg, conv_start_a, expected_conv);
-			num_fails = num_fails + 1;
-		end
-	endtask
-
-	// task to check data_out 
-	task check_data_out(input [15:0] exp_output, input string msg);
-		assert(data_out === exp_output) begin
-			$display("[PASS] %s: data_out is %b", msg, data_out);
-			num_passes = num_passes + 1;
-		end else begin
-			$error("[FAIL] %s: output is %b (expected %b)", msg, data_out, exp_output);
-			num_fails = num_fails + 1;
-		end
-	endtask
-
-	task check_data_valid(input expected_d_valid, input string msg);
-		assert(data_valid === expected_d_valid) begin
-			$display("[PASS] %s: conv_start_x is %d", msg, conv_start_a);
-			num_passes = num_passes + 1;
-		end else begin
-			$error("[FAIL] %s: output is %d (expected %d)", msg, data_valid, expected_d_valid);
-			num_fails = num_fails + 1;
-		end
-	endtask
-
-	task reset;
-
-		reset_n = 1'b0;
-		busy = 1'b1;
-		
-	endtask 
-
-
-	//start testing
-	initial begin
-
-		reset;
-
-		//offset input changes
-		#7
-
-		$display("\n\n==== Check outputs after reset ====");
-			reset;
-			#10 //wait for outputs to update
-			check_chipselect_n(1'b1, "chipsel after reset")
-			check_write_n(1'b1, "write after reset")
-			check_conv_start_x(1'b0, "conv_x after reset")
-			check_read_n(1'b1, "read after reset")
-			check_data_valid(1'b0, "data valid after reset")
-
-		$display("=========================\n\n");
-
-		$display("\n\n==== Check  ====");
-			reset;
-			#10 //wait for chip sel to update
-		$display("=========================\n\n");
-			
+	// Load First Data Procedure
+	initial forever begin
+		@(negedge busy);
+		#READN_DATA_DELAY;
+		data_adc_drive = adc_data_queue.pop_front();
 	end
-	
+
+	// Read Procedure
+    initial forever begin
+		@(posedge clk);
+		if (~read_n && ~chipselect_n) begin
+			// Fill databits with valid data after delay
+			#READN_DATA_DELAY;
+			data_adc_drive = adc_data_queue.pop_front();
+
+			// // Wait for read_n assertion, then remove valid data
+			// @(posedge read_n);
+			// // #DATA_HOLD_DELAY;
+			// data_adc_drive = 'x;
+		end
+    end
+
+	// // Chipselect Deassertion Procedure
+	// initial forever begin
+	// 	@(posedge chipselect_n);
+	// 	// Set databits as high-impedance after delay
+	// 	#DATA_TRI_DELAY;
+	// 	data_adc_drive = 'z;
+    // end
+
+	// Write Procedure
+	initial forever begin
+		if (~write_n && ~chipselect_n) begin
+			// After hold time, latch config registers
+			@(posedge write_n);
+			#DATA_HOLD_WRITE;
+			config_register[31:16] = data_adc;
+
+			@(negedge write_n);
+
+			@(posedge write_n);
+			#DATA_HOLD_WRITE;
+			config_register[15:0] = data_adc;
+		end
+		#1;
+	end
+
+    always_ff @(posedge clk) begin
+        if (data_valid) begin
+			received_data_queue.push_back(data_out);
+			$display("Receiving data: %d", data_out);
+        end
+    end
+
+    initial begin
+		data_adc_drive = 'z;
+		sresetn = 1'b1;
+		@(posedge clk);
+
+		sresetn = 1'b0;
+		@(posedge clk);
+
+		sresetn = 1'b1;
+		@(posedge clk);
+
+		repeat (NUM_TESTS) begin
+			repeat(8) begin
+				@(posedge data_valid);
+				A = golden_data_queue.pop_front();
+				B = received_data_queue.pop_front();
+				assert(A == B)
+    				else $error("Received Data is Incorrect! %d != %d", A, B);
+			end
+		end
+
+		$stop();
+    end
+
 endmodule

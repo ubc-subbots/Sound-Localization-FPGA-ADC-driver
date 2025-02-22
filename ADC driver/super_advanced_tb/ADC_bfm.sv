@@ -1,3 +1,5 @@
+`timescale 1ns/1ps
+
 interface ADC_bfm; 
 	wire [15:0] DB;
 	
@@ -54,19 +56,19 @@ interface ADC_bfm;
 		Busy = 1'b0; 
 		@(negedge RD_N); 
 		DBin = A0;
-		$display("memout is %d", DUT.driver_inst.toMem); 
+		$display("memout is %d", DUT.adc_ads8528_ctrl_inst.data_out); 
 		@(negedge RD_N);
 		DBin = A1;
-		$display("memout is %d", DUT.driver_inst.toMem); 
+		$display("memout is %d", DUT.adc_ads8528_ctrl_inst.data_out); 
 		@(negedge RD_N);
 		DBin = B0;
-		$display("memout is %d", DUT.driver_inst.toMem); 
+		$display("memout is %d", DUT.adc_ads8528_ctrl_inst.data_out); 
 		@(negedge RD_N); 
 		DBin = B1; 
-		$display("memout is %d", DUT.driver_inst.toMem); 
+		$display("memout is %d", DUT.adc_ads8528_ctrl_inst.data_out); 
 		@(negedge RD_N); 
 		DBin = C0;
-		$display("memout is %d", DUT.driver_inst.toMem); 
+		$display("memout is %d", DUT.adc_ads8528_ctrl_inst.data_out); 
 		/*@(negedge RD_N); 
 		DBin = C1; 
 		@(negedge RD_N); 

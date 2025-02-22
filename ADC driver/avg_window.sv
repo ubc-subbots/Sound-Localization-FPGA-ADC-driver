@@ -14,10 +14,10 @@ module avg_window #(
 	parameter int N          = 8, // Number of shift registers to average
     parameter int DATA_WIDTH = 16 // Input/output data bitwidth
 ) (
-    input  logic                  clk,
-    input  logic                  sresetn,
-    input  logic [DATA_WIDTH-1:0] data_in,
-    input  logic                  data_valid,
+    input  wire logic                  clk,
+    input  wire logic                  sresetn,
+    input  wire logic [DATA_WIDTH-1:0] data_in,
+    input  wire logic                  data_valid,
     output logic [DATA_WIDTH-1:0] average,
     output logic                  average_valid
 );

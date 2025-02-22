@@ -7,7 +7,7 @@
 interface ADS8528_Int #(
     parameter DATA_WIDTH = 16
 ) (
-    input                  clk
+    input wire clk
 );
     logic                  reset;
     logic [DATA_WIDTH-1:0] databits;        // Primary data-bus of the adc
@@ -28,7 +28,7 @@ interface ADS8528_Int #(
     logic                  busy;            // Indicates that a conversion is taking place
 
     modport Master (
-        inout databits,
+        inout tri databits,
 
         output reset,
         output read_n,
@@ -48,7 +48,7 @@ interface ADS8528_Int #(
     );
 
     modport Slave (
-        inout databits,
+        inout tri databits,
 
         input reset,
         input read_n,

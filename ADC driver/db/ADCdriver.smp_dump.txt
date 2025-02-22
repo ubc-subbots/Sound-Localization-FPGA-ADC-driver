@@ -1,7 +1,0 @@
-
-State Machine - |top|driver:driver_inst|state_ff
-Name state_ff.HOLD state_ff.MEM state_ff.BUSY state_ff.INIT 
-state_ff.HOLD 0 0 0 0 
-state_ff.INIT 1 0 0 1 
-state_ff.BUSY 1 0 1 0 
-state_ff.MEM 1 1 0 0 
