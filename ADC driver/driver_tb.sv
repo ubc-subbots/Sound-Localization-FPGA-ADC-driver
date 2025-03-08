@@ -2,7 +2,8 @@
 
 module driver_tb();
 
-    parameter int NUM_TESTS    = 10;
+    parameter bit VERBOSE      = 0;
+	parameter int NUM_TESTS    = 100;
     parameter int CLOCK_PERIOD = 20;  // Definite minimum clock period
 
 
@@ -10,7 +11,8 @@ module driver_tb();
     // SECTION: Constants and Type Declarations
 
 
-	localparam int        MAX_CONV_DELAY     = 133;  // Maximum time delay for a conversion to complete
+	localparam int        MIN_CONV_DELAY     = 133;    // Minimum time delay for a conversion to complete
+	localparam int        MAX_CONV_DELAY     = 200;  // Maximum time delay for a conversion to complete
     localparam int        CONV_TO_BUSY_DELAY = 25;   // Time delay from conv_start assertion to busy assertion by ADC
     localparam int        READN_DATA_DELAY   = 15;   // Time delay from read_n assertion to data becoming valid
 	localparam int        DATA_HOLD_DELAY    = 5;	 // Time delay to output being undefined after read_n goes high
@@ -59,6 +61,8 @@ module driver_tb();
 
 	logic [15:0] A, B;
 
+	bit error;
+
 
     ////////////////////////////////////////////////////////////////////////////////////////////////
     // SECTION: DUT Instantiation
@@ -102,7 +106,7 @@ module driver_tb();
 
 	// Conversion Start Procedure
     initial forever begin
-		if (conv_start_a) begin
+		@(posedge conv_start_a) begin
 			// Assert BUSY signal after delay
 			#CONV_TO_BUSY_DELAY;
 			busy = 1'b1;
@@ -111,12 +115,15 @@ module driver_tb();
 			repeat (8) begin
 				test_data = $urandom();
 				golden_data_queue.push_back(test_data);
-				$display("Pushing test: %d", test_data);
 				adc_data_queue.push_back(test_data);
+
+				if (VERBOSE) begin
+					$display("Pushing test: %h", test_data);
+				end
 			end
 
 			// Random conversion time delay
-			#($urandom() % MAX_CONV_DELAY);
+			#(($urandom() % MAX_CONV_DELAY) + MIN_CONV_DELAY);
 
 			// Deassert BUSY signal
 			busy = 1'b0;
@@ -138,21 +145,8 @@ module driver_tb();
 			// Fill databits with valid data after delay
 			#READN_DATA_DELAY;
 			data_adc_drive = adc_data_queue.pop_front();
-
-			// // Wait for read_n assertion, then remove valid data
-			// @(posedge read_n);
-			// // #DATA_HOLD_DELAY;
-			// data_adc_drive = 'x;
 		end
     end
-
-	// // Chipselect Deassertion Procedure
-	// initial forever begin
-	// 	@(posedge chipselect_n);
-	// 	// Set databits as high-impedance after delay
-	// 	#DATA_TRI_DELAY;
-	// 	data_adc_drive = 'z;
-    // end
 
 	// Write Procedure
 	initial forever begin
@@ -174,11 +168,15 @@ module driver_tb();
     always_ff @(posedge clk) begin
         if (data_valid) begin
 			received_data_queue.push_back(data_out);
-			$display("Receiving data: %d", data_out);
+
+			if (VERBOSE) begin
+				$display("Time: %t, Receiving data: %h", $time(), data_out);
+			end
         end
     end
 
     initial begin
+		error = 1'b0;
 		data_adc_drive = 'z;
 		sresetn = 1'b1;
 		@(posedge clk);
@@ -191,13 +189,25 @@ module driver_tb();
 
 		repeat (NUM_TESTS) begin
 			repeat(8) begin
-				@(posedge data_valid);
+				@(negedge data_valid);
+				#1;
 				A = golden_data_queue.pop_front();
 				B = received_data_queue.pop_front();
 				assert(A == B)
-    				else $error("Received Data is Incorrect! %d != %d", A, B);
+    				else begin
+						$error("Received Data is Incorrect! %d != %d", A, B);
+						error = 1'b1;
+					end
 			end
 		end
+
+		$display("|||||||||||||||||||||||||||||||||||||||||||||||||");
+		if (~error) begin
+			$display("SUCCESS! ALL TESTS PASSED!");
+		end else begin
+			$display("ERROR! TEST FAILED!");
+		end
+		$display("|||||||||||||||||||||||||||||||||||||||||||||||||");
 
 		$stop();
     end

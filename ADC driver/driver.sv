@@ -50,10 +50,12 @@ module driver (
 
 
     typedef enum {
-        HOLD,
-        INIT,
-        BUSY,
-        MEM
+        WRITE_ON,
+        WRITE_OFF,
+        START_CONV,
+        WAIT_BUSY,
+        READ_ON,
+        DATA_OUT
     } state_t;
 
 
@@ -61,18 +63,17 @@ module driver (
     // SECTION: Signal Declarations
 
 
+    // Driver FSM state register
     state_t state_ff;
 
-    logic finished_write;
+    // Controls all 4 conv_start bits with one bit
     logic conv_start;
-    logic busy_prev;
 
-    logic [3:0] selected_channel; // Indicates which channel of ADC is being read, resets to 0 after 5
+    // Controls number of transactions of reads/writes throughout ADC Driver FSM
+    logic [3:0] num_transactions;
 
-    logic [6:0] write_count;
-
+    // Raw data to drive to ADC databits
     logic [15:0] data_adc_out;
-    logic [15:0] data_out_reg;
 
 
     ////////////////////////////////////////////////////////////////////////////////////////////////
@@ -84,6 +85,7 @@ module driver (
     assign software_mode = 1'b1;
     assign serial_mode   = 1'b0;
     assign standby_n     = 1'b1;
+    assign chipselect_n  = 1'b0;
 
     // All channel conversions are started simultaneously
     assign conv_start_a = conv_start;
@@ -96,129 +98,107 @@ module driver (
     // SECTION: Logic Implementation
 
 
-    // Busy Previous Register, used to give one cycle of lenience after busy is deasserted
-    always_ff @(posedge clk) begin
-        busy_prev <= busy;
-    end
-
-    // Chip Select Register
-    always_ff @(posedge clk) begin
-        // Initialize the chip as unselected
-        if (!sresetn) begin
-            chipselect_n <= 1'b1;
-
-        end else begin
-            if (finished_write) begin
-                if (conv_start || state_ff == BUSY || state_ff == MEM) begin
-                    chipselect_n <= 1'b0;
-                end else begin
-                    chipselect_n <= 1'b1;
-                end
-
-            // While write is not finished, keep chip selected until the complete
-            end else begin
-                chipselect_n <= write_count == '0;
-            end
-        end
-    end
-
-    // Initial Write to ADS8528 Config-Register Control
+    // ADS8528 Driver State Machine Transition Control
     always_ff @(posedge clk) begin
         if (!sresetn) begin
-            finished_write <= 1'b0;
-            write_count    <= 3'd4;
-            write_n        <= 1'b1;
-            data_adc_out   <= 'X;
-
-        end else begin 
-            if (!finished_write) begin
-                if (write_count == '0) begin
-                    finished_write <= 1'b1;
-
-                end else begin
-                    write_count <= write_count - 1;
-                    write_n     <= !write_n;
-                end
-
-                if (write_count > 3'd2) begin
-                    data_adc_out <= 16'h8054; // First config register
-
-                end else begin 
-                    data_adc_out <= 16'h43FF; // Second config register
-                end
-            end
-        end
-    end
-
-    always_ff @(posedge clk) begin
-        if (!sresetn) begin
-            state_ff         <= HOLD;
-            selected_channel <= 3'b000;
-            conv_start       <= 1'b0;
-            read_n           <= 1'b1;
+            state_ff         <= WRITE_ON;
+            num_transactions <= '0;
+            data_out         <= 'X;
             data_valid       <= 1'b0;
 
         end else begin
-            case(state_ff)
-                // Waiting while initial writes to ADC are completed
-                HOLD: begin
+            case (state_ff)
+                // Drive write_n with databits with config register info
+                WRITE_ON: begin
+                    state_ff         <= WRITE_OFF;
+                    num_transactions <= num_transactions + 1'b1;
+                end
+
+                // Deassert write_n to allow the config register to then latch the next set of bits
+                WRITE_OFF: begin
+                    if (num_transactions == 4'd2) begin
+                        state_ff <= START_CONV;
+                    end else begin
+                        state_ff <= WRITE_ON;
+                    end
+                end
+
+                // Initiate a conversion and wait for busy to be asserted
+                START_CONV: begin
+                    num_transactions <= '0;
+                    if (busy) begin
+                        state_ff     <= WAIT_BUSY;
+                    end
+                end
+
+                // Wait for busy to be deasserted
+                WAIT_BUSY: begin
+                    if (~busy) begin
+                        state_ff <= READ_ON;
+                    end
+                end
+
+                // Read an ADC data sample
+                READ_ON: begin
+                    state_ff         <= DATA_OUT;
+                    num_transactions <= num_transactions + 1'b1;
+                    data_out         <= data_adc;
+                    data_valid       <= 1'b1;
+                end
+
+                // Send the ADC sample to output register (no backpressure, must be read immediately)
+                DATA_OUT: begin
+                    data_out   <= 'X;
                     data_valid <= 1'b0;
-                    read_n     <= 1'b1;
-                    conv_start <= 1'b0;
-
-                    if (finished_write) begin
-                        state_ff <= INIT;
+                    if (num_transactions == 4'd8) begin
+                        state_ff  <= START_CONV;
                     end else begin
-                        state_ff <= HOLD;
+                        state_ff  <= READ_ON;
                     end
                 end
 
-                // Initiates conversions
-                INIT: begin
-                    data_valid <= 1'b0;
-                    read_n     <= 1'b1;
-                    conv_start <= 1'b1;
-
-                    selected_channel <= 3'b000;
-                    // Transitioning when busy goes high ensures that the conversion has actually
-                    // begun before going to BUSY state.
-                    if (conv_start) begin
-                        state_ff <= BUSY;
-                    end else begin
-                        state_ff <= INIT;
-                    //
-                    end
+                default: begin
+                    state_ff         <= WRITE_ON;
+                    num_transactions <= '0;
                 end
-
-                // Waits for busy to go low and then sets read_n low
-                BUSY: begin
-                    data_valid   <= 1'b0;
-                    read_n       <= busy || selected_channel == 3'd6;
-                    conv_start   <= 1'b0;
-                    data_out_reg <= data_adc;
-
-                    if (selected_channel == 3'd6) begin
-                        state_ff <= INIT;
-                    end else if (busy) begin
-                        state_ff <= BUSY;
-                    end else begin
-                        state_ff <= MEM;
-                    end
-                end
-
-                // Handshake ADC data_out
-                MEM: begin
-                    data_out   <= data_adc;
-                    data_valid <= 1'b1;
-                    read_n     <= 1'b1;
-
-                    selected_channel <= selected_channel + 1'b1;
-
-                    state_ff <= BUSY;
-                end
-
-                default: state_ff <= INIT;
             endcase
+        end
+    end
+
+    // ADS8528 Driver State Machine Output Control
+    always_comb begin
+        // Default deasserted combinational values
+        conv_start   = 1'b0;
+        write_n      = 1'b1;
+        read_n       = 1'b1;
+        data_adc_out = 'X;
+
+        case (state_ff)
+            // Assert write with LSB/MSB of config register
+            WRITE_ON: begin
+                write_n = 1'b0;
+                if (num_transactions == '0) begin
+                    data_adc_out = 16'h8054; // First config register
+
+                end else begin 
+                    data_adc_out = 16'h43FF; // Second config register
+                end
+            end
+
+            // Assert conversion start bits
+            START_CONV: begin
+                conv_start = 1'b1;
+            end
+
+            // Assert read
+            READ_ON: begin
+                read_n = 1'b0;
+            end
+        endcase
+
+        // Hold write deasserted during reset
+        if (!sresetn) begin
+            write_n = 1'b1;
         end
     end
 endmodule
