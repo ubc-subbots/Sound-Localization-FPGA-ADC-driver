@@ -88,11 +88,12 @@ module top #(
     logic [NUM_CHANNELS-1:0]  adc_channel_average_valid;
 
     // FIFO Buffer Signals
-    logic                            write_to_buffer;  // Assert to write a value to the input of the buffer
-    logic                            read_from_buffer; // Assert to read the value at the output of the buffer
-    logic [$clog2(BUFFER_DEPTH)-1:0] buffer_count;     // Indicates the number of values stored in the buffer
-    logic                            full, empty;      // Indicates if the buffer is full or empty
-    logic [15:0]                     buffer_data_out[NUM_CHANNELS-1:0];  // Output of the buffer
+    logic                            write_to_buffer  [NUM_CHANNELS-1:0]; // Assert to write a value to the input of the buffer
+    logic                            read_from_buffer [NUM_CHANNELS-1:0]; // Assert to read the value at the output of the buffer
+    logic [$clog2(BUFFER_DEPTH)-1:0] buffer_count     [NUM_CHANNELS-1:0]; // Indicates the number of values stored in the buffer
+    logic                            empty            [NUM_CHANNELS-1:0]; // Indicates if the buffer is empty
+    logic                            full             [NUM_CHANNELS-1:0]; // Indicates if the buffer is full
+    logic [15:0]                     buffer_data_out  [NUM_CHANNELS-1:0]; // Output of the buffer
 
     // SPI Slave signals
     logic ready_for_data;
@@ -324,6 +325,12 @@ module top #(
     end
 
     always_comb begin
+            for(int i = 0; i < NUM_CHANNELS; i++) begin
+                write_to_buffer[i]  = 1'b0;
+                read_from_buffer[i] = 1'b0;
+            end
+            buffer_data_to_SPI = 16'b0;
+
             case(state)
                 // Wait for THRESHOLD_COUNT voltage values over THRESHOLD_VOLTAGE to be detected
                 WAITING: begin
