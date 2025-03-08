@@ -360,14 +360,6 @@ set_instance_assignment -name POST_FIT_CONNECT_TO_SLD_NODE_ENTITY_PORT crc[4] -t
 set_instance_assignment -name POST_FIT_CONNECT_TO_SLD_NODE_ENTITY_PORT crc[9] -to auto_signaltap_1|gnd -section_id auto_signaltap_1
 set_instance_assignment -name POST_FIT_CONNECT_TO_SLD_NODE_ENTITY_PORT crc[14] -to auto_signaltap_1|vcc -section_id auto_signaltap_1
 set_instance_assignment -name POST_FIT_CONNECT_TO_SLD_NODE_ENTITY_PORT crc[18] -to auto_signaltap_1|vcc -section_id auto_signaltap_1
-set_global_assignment -name SYSTEMVERILOG_FILE driver.sv
-set_global_assignment -name SYSTEMVERILOG_FILE driver_tb.sv
-set_global_assignment -name SYSTEMVERILOG_FILE ADCmemory.sv
-set_global_assignment -name SYSTEMVERILOG_FILE SPI_slave.sv
-set_global_assignment -name SYSTEMVERILOG_FILE SPI_tb.sv
-set_global_assignment -name SYSTEMVERILOG_FILE top.sv
-set_global_assignment -name SYSTEMVERILOG_FILE Clk_divider.sv
-set_global_assignment -name SIGNALTAP_FILE stp1.stp
 set_location_assignment PIN_AE17 -to SPI_RDY
 set_global_assignment -name SLD_NODE_PARAMETER_ASSIGNMENT "SLD_SEGMENT_SIZE=4096" -section_id top
 set_instance_assignment -name POST_FIT_CONNECT_TO_SLD_NODE_ENTITY_PORT crc[2] -to top|gnd -section_id top
@@ -649,4 +641,15 @@ set_global_assignment -name SLD_NODE_PARAMETER_ASSIGNMENT "SLD_INVERSION_MASK=00
 set_global_assignment -name SLD_NODE_PARAMETER_ASSIGNMENT "SLD_INVERSION_MASK_LENGTH=389" -section_id top
 set_instance_assignment -name POST_FIT_CONNECT_TO_SLD_NODE_ENTITY_PORT crc[5] -to top|gnd -section_id top
 set_instance_assignment -name POST_FIT_CONNECT_TO_SLD_NODE_ENTITY_PORT crc[15] -to top|vcc -section_id top
+set_global_assignment -name SYSTEMVERILOG_FILE driver.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ADCmemory.sv
+set_global_assignment -name SYSTEMVERILOG_FILE SPI_slave.sv
+set_global_assignment -name SYSTEMVERILOG_FILE SPI_tb.sv
+set_global_assignment -name SYSTEMVERILOG_FILE top.sv
+set_global_assignment -name SYSTEMVERILOG_FILE Clk_divider.sv
+set_global_assignment -name SIGNALTAP_FILE stp1.stp
 set_global_assignment -name SLD_FILE db/stp1_auto_stripped.stp
+set_instance_assignment -name PARTITION_HIERARCHY root_partition -to | -section_id Top
+set_global_assignment -name PARTITION_NETLIST_TYPE SOURCE -section_id Top
+set_global_assignment -name PARTITION_FITTER_PRESERVATION_LEVEL PLACEMENT_AND_ROUTING -section_id Top
+set_global_assignment -name PARTITION_COLOR 16764057 -section_id Top
